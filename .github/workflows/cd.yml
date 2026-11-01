@@ -1,0 +1,76 @@
+name: CD
+
+# Runs after CI succeeds on main: deploy to staging, then (after manual
+# approval via the "production" environment) to production.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit SHA whose images should be deployed
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  prepare:
+    name: Resolve release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    outputs:
+      sha: ${{ steps.r.outputs.sha }}
+      owner: ${{ steps.r.outputs.owner }}
+    steps:
+      - id: r
+        run: |
+          SHA="${{ github.event.inputs.sha || github.event.workflow_run.head_sha }}"
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "owner=${OWNER}" >> "$GITHUB_OUTPUT"
+
+  deploy-staging:
+    name: Deploy to staging
+    runs-on: ubuntu-latest
+    needs: prepare
+    environment:
+      name: staging
+      url: https://staging.shop.example.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: ./.github/actions/deploy
+        with:
+          overlay: staging
+          namespace: shop-staging
+          sha: ${{ needs.prepare.outputs.sha }}
+          owner: ${{ needs.prepare.outputs.owner }}
+          kubeconfig: ${{ secrets.KUBE_CONFIG_STAGING }}
+
+  deploy-production:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    needs: [prepare, deploy-staging]
+    # Configure required reviewers on this environment in
+    # Settings -> Environments -> production.
+    environment:
+      name: production
+      url: https://shop.example.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: ./.github/actions/deploy
+        with:
+          overlay: prod
+          namespace: shop-prod
+          sha: ${{ needs.prepare.outputs.sha }}
+          owner: ${{ needs.prepare.outputs.owner }}
+          kubeconfig: ${{ secrets.KUBE_CONFIG_PROD }}

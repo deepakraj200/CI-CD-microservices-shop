@@ -1,0 +1,70 @@
+name: Deploy overlay
+description: Apply a Kustomize overlay with pinned image tags, wait for rollout, smoke test, roll back on failure.
+
+inputs:
+  overlay:
+    description: Overlay directory name under k8s/overlays
+    required: true
+  namespace:
+    description: Target Kubernetes namespace
+    required: true
+  sha:
+    description: Image tag (commit SHA)
+    required: true
+  owner:
+    description: Lower-case registry owner
+    required: true
+  kubeconfig:
+    description: Base64-encoded kubeconfig
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Configure kubectl
+      shell: bash
+      run: |
+        mkdir -p "$HOME/.kube"
+        echo "${{ inputs.kubeconfig }}" | base64 -d > "$HOME/.kube/config"
+        chmod 600 "$HOME/.kube/config"
+        kubectl version --client
+
+    - name: Pin image tags
+      shell: bash
+      working-directory: k8s/overlays/${{ inputs.overlay }}
+      run: |
+        curl -sSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz" | tar xz -C /tmp
+        for svc in gateway order product; do
+          /tmp/kustomize edit set image \
+            "ghcr.io/your-org/shop-${svc}=ghcr.io/${{ inputs.owner }}/shop-${svc}:${{ inputs.sha }}"
+        done
+
+    - name: Apply manifests
+      shell: bash
+      run: |
+        kubectl create namespace "${{ inputs.namespace }}" --dry-run=client -o yaml | kubectl apply -f -
+        kubectl apply -k "k8s/overlays/${{ inputs.overlay }}"
+
+    - name: Wait for rollout
+      shell: bash
+      run: |
+        for d in product order gateway; do
+          kubectl -n "${{ inputs.namespace }}" rollout status "deployment/${d}" --timeout=180s
+        done
+
+    - name: Smoke test
+      shell: bash
+      run: |
+        kubectl -n "${{ inputs.namespace }}" port-forward svc/gateway 8080:80 >/tmp/pf.log 2>&1 &
+        PF=$!
+        sleep 3
+        ./scripts/smoke-test.sh http://localhost:8080
+        kill $PF
+
+    - name: Roll back on failure
+      if: failure()
+      shell: bash
+      run: |
+        for d in product order gateway; do
+          kubectl -n "${{ inputs.namespace }}" rollout undo "deployment/${d}" || true
+        done

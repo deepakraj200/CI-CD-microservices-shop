@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+*.pyc
+test_*.py
+requirements-dev.txt
+.flake8

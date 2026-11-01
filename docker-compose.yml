@@ -1,0 +1,32 @@
+services:
+  product:
+    build: ./services/product
+    environment:
+      PORT: "5001"
+    ports:
+      - "5001:5001"
+
+  order:
+    build: ./services/order
+    environment:
+      PORT: "5002"
+      PRODUCT_SERVICE_URL: http://product:5001
+    depends_on:
+      product:
+        condition: service_healthy
+    ports:
+      - "5002:5002"
+
+  gateway:
+    build: ./services/gateway
+    environment:
+      PORT: "8080"
+      PRODUCT_SERVICE_URL: http://product:5001
+      ORDER_SERVICE_URL: http://order:5002
+    depends_on:
+      product:
+        condition: service_healthy
+      order:
+        condition: service_healthy
+    ports:
+      - "8080:8080"

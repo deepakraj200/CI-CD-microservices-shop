@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product
+  labels: {app: product}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: product}
+  template:
+    metadata:
+      labels: {app: product}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: product
+          image: ghcr.io/your-org/shop-product:latest
+          ports:
+            - containerPort: 5001
+          env:
+            - {name: PORT, value: "5001"}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 5001}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: 5001}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: product
+spec:
+  selector: {app: product}
+  ports:
+    - {port: 5001, targetPort: 5001}
